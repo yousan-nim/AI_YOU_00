@@ -16,7 +16,7 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
-input double           InpCutLossPercent      = 5.0;
+input double           InpCutLossPercent      = 2.0;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
