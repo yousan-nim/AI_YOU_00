@@ -202,10 +202,6 @@ void OnTick()
          continue;
 
       int pType = (int)PositionGetInteger(POSITION_TYPE);
-      if(basketType==-1)
-         basketType = pType;
-      else if(basketType!=pType)
-         basketType = -2;
       double pVol = PositionGetDouble(POSITION_VOLUME);
       double pProfit = PositionGetDouble(POSITION_PROFIT);
       floatingProfit += pProfit;
