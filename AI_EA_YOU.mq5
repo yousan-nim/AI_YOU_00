@@ -17,6 +17,9 @@ input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
 input double           InpCutLossPercent      = 8.0;
+input int              InpRescueTriggerPoints = 200;
+input double           InpRescueLotMultiplier = 2.0;
+input double           InpRescueCloseNetMoney = 0.0;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -122,6 +125,22 @@ double GetDynamicLotsByBalance()
   }
 
 //+------------------------------------------------------------------+
+bool IsRescueComment(const string comment)
+  {
+   return(StringFind(comment,"AI_EA_YOU RESCUE",0)==0);
+  }
+
+//+------------------------------------------------------------------+
+bool ClosePositionByTicket(const ulong ticket)
+  {
+   if(ticket==0)
+      return(false);
+   if(!PositionSelectByTicket(ticket))
+      return(false);
+   return(trade.PositionClose(ticket));
+  }
+
+//+------------------------------------------------------------------+
 int OnInit()
   {
    gTradeSymbol = InpSymbol;
@@ -182,7 +201,6 @@ void OnTick()
    if(!buySignal && !sellSignal)
       return;
 
-   int    digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
    if(point<=0.0)
       return;
@@ -194,6 +212,16 @@ void OnTick()
    double latestOpenPrice = 0.0;
    datetime latestOpenTime = 0;
    double floatingProfit = 0.0;
+   ulong rescueTicket = 0;
+   int rescueType = -1;
+   double rescueProfit = 0.0;
+   ulong rescuePairTicket = 0;
+   double rescuePairProfit = 0.0;
+   bool hasRescuePair = false;
+   ulong worstLosingTicket = 0;
+   int worstLosingType = -1;
+   double worstLosingPoints = 0.0;
+   double worstLosingLots = 0.0;
 
    int total = PositionsTotal();
    for(int i=total-1; i>=0; i--)
@@ -209,22 +237,46 @@ void OnTick()
       if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
          continue;
 
+      string comment = PositionGetString(POSITION_COMMENT);
       int pType = (int)PositionGetInteger(POSITION_TYPE);
+      double pProfit = PositionGetDouble(POSITION_PROFIT);
+      double pLots = PositionGetDouble(POSITION_VOLUME);
+      double pOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
+      posCount++;
+      floatingProfit += pProfit;
+
+      if(IsRescueComment(comment))
+        {
+         rescueTicket = ticket;
+         rescueType = pType;
+         rescueProfit = pProfit;
+         continue;
+        }
+
       if(basketType==-1)
          basketType = pType;
       else if(basketType!=pType)
+         basketType = -2;
+
+      double adversePoints = 0.0;
+      if(pType==POSITION_TYPE_BUY)
+         adversePoints = (pOpen-bid)/point;
+      else if(pType==POSITION_TYPE_SELL)
+         adversePoints = (ask-pOpen)/point;
+
+      if(adversePoints>worstLosingPoints)
         {
-         DebugPrint("Skip: mixed BUY/SELL basket detected");
-         return;
+         worstLosingPoints = adversePoints;
+         worstLosingTicket = ticket;
+         worstLosingType = pType;
+         worstLosingLots = pLots;
         }
 
-      posCount++;
-      floatingProfit += PositionGetDouble(POSITION_PROFIT);
-      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
       if(pTime>=latestOpenTime)
         {
          latestOpenTime = pTime;
-         latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         latestOpenPrice = pOpen;
         }
      }
 
@@ -244,6 +296,73 @@ void OnTick()
         }
      }
 
+   if(rescueTicket!=0)
+     {
+      for(int i=total-1; i>=0; i--)
+        {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket==0 || ticket==rescueTicket)
+            continue;
+         if(!PositionSelectByTicket(ticket))
+            continue;
+         string sym = PositionGetString(POSITION_SYMBOL);
+         long mg = PositionGetInteger(POSITION_MAGIC);
+         if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+            continue;
+         string comment = PositionGetString(POSITION_COMMENT);
+         if(IsRescueComment(comment))
+            continue;
+         int pType = (int)PositionGetInteger(POSITION_TYPE);
+         if(pType==rescueType)
+            continue;
+         double pProfit = PositionGetDouble(POSITION_PROFIT);
+         if(!hasRescuePair || pProfit<rescuePairProfit)
+           {
+            hasRescuePair = true;
+            rescuePairTicket = ticket;
+            rescuePairProfit = pProfit;
+           }
+        }
+
+      if(hasRescuePair)
+        {
+         double netPair = rescueProfit + rescuePairProfit;
+         if(netPair >= InpRescueCloseNetMoney)
+           {
+            bool ok1 = ClosePositionByTicket(rescueTicket);
+            bool ok2 = ClosePositionByTicket(rescuePairTicket);
+            if(ok1 && ok2)
+               DebugPrint("Rescue pair closed. Net="+DoubleToString(netPair,2));
+            else
+               Print("Rescue pair close failed");
+           }
+        }
+      return;
+     }
+
+   if(worstLosingTicket!=0 && worstLosingPoints>=InpRescueTriggerPoints && posCount<maxPositions)
+     {
+      double rescueLots = NormalizeVolumeToStep(worstLosingLots * MathMax(0.1,InpRescueLotMultiplier));
+      if(rescueLots>0.0)
+        {
+         if(worstLosingType==POSITION_TYPE_BUY)
+           {
+            if(!trade.Sell(rescueLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE"))
+               Print("Rescue SELL failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+            else
+               DebugPrint("Rescue SELL opened for losing BUY");
+           }
+         else if(worstLosingType==POSITION_TYPE_SELL)
+           {
+            if(!trade.Buy(rescueLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE"))
+               Print("Rescue BUY failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+            else
+               DebugPrint("Rescue BUY opened for losing SELL");
+           }
+        }
+      return;
+     }
+
    if(posCount>=maxPositions)
      {
       DebugPrint("Skip: max positions reached ("+IntegerToString(maxPositions)+")");
@@ -252,6 +371,11 @@ void OnTick()
 
    if(posCount>0)
      {
+      if(basketType==-2)
+        {
+         DebugPrint("Skip: mixed BUY/SELL basket detected");
+         return;
+        }
       if((basketType==POSITION_TYPE_BUY && !buySignal) || (basketType==POSITION_TYPE_SELL && !sellSignal))
         {
          DebugPrint("Skip: existing basket direction is opposite to signal");
