@@ -43,6 +43,44 @@ void DebugPrint(const string msg)
   }
 
 //+------------------------------------------------------------------+
+int GetMinStopPoints()
+  {
+   long stopsLevel  = SymbolInfoInteger(gTradeSymbol,SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevel = SymbolInfoInteger(gTradeSymbol,SYMBOL_TRADE_FREEZE_LEVEL);
+   if(stopsLevel<0)  stopsLevel = 0;
+   if(freezeLevel<0) freezeLevel = 0;
+   return((int)MathMax(stopsLevel,freezeLevel) + 1);
+  }
+
+//+------------------------------------------------------------------+
+bool AreStopsValid(const bool isBuy,const double sl,const double tp,const double bid,const double ask,const double minDistPrice)
+  {
+   if(isBuy)
+     {
+      if(sl>0.0 && (bid-sl)<=minDistPrice) return(false);
+      if(tp>0.0 && (tp-ask)<=minDistPrice) return(false);
+      return(true);
+     }
+
+   if(sl>0.0 && (sl-ask)<=minDistPrice) return(false);
+   if(tp>0.0 && (bid-tp)<=minDistPrice) return(false);
+   return(true);
+  }
+
+//+------------------------------------------------------------------+
+double NormalizePriceToTick(const double price)
+  {
+   double tickSize = SymbolInfoDouble(gTradeSymbol,SYMBOL_TRADE_TICK_SIZE);
+   int digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
+   if(tickSize<=0.0)
+      return(NormalizeDouble(price,digits));
+
+   double steps = MathRound(price/tickSize);
+   double normalized = steps*tickSize;
+   return(NormalizeDouble(normalized,digits));
+  }
+
+//+------------------------------------------------------------------+
 int OnInit()
   {
    gTradeSymbol = InpSymbol;
@@ -70,6 +108,7 @@ int OnInit()
       DebugPrint("Info: EA is forced to M1. InpTimeframe is ignored.");
    if(!InpOnePositionOnly)
       DebugPrint("Info: one-position-only mode is forced ON. InpOnePositionOnly is ignored.");
+   DebugPrint("Broker min stop points="+IntegerToString(GetMinStopPoints()));
    DebugPrint("EA ready. Symbol="+gTradeSymbol+" TF="+EnumToString(TRADE_TF));
 
    return(INIT_SUCCEEDED);
@@ -139,22 +178,36 @@ void OnTick()
    if(point<=0.0)
       return;
 
-   double slDistance = (double)InpTrailingStopPoints * point;
-   double tpDistance = (double)InpTakeProfitPoints * point;
+   int minStopPoints = GetMinStopPoints();
+   int slPoints = MathMax(InpTrailingStopPoints,minStopPoints);
+   int tpPoints = MathMax(InpTakeProfitPoints,minStopPoints);
+   double slDistance = (double)slPoints * point;
+   double tpDistance = (double)tpPoints * point;
+   double minDistPrice = (double)minStopPoints * point;
    double lots = 0.01;
 
    if(buySignal)
      {
-      double sl = NormalizeDouble(ask - slDistance,digits);
-      double tp = NormalizeDouble(ask + tpDistance,digits);
+      double sl = NormalizePriceToTick(bid - slDistance);
+      double tp = NormalizePriceToTick(ask + tpDistance);
+      if(!AreStopsValid(true,sl,tp,bid,ask,minDistPrice))
+        {
+         DebugPrint("Skip BUY: invalid stop distance for broker rules");
+         return;
+        }
       if(!trade.Buy(lots,gTradeSymbol,0.0,sl,tp,"AI_EA_YOU BUY"))
          Print("Buy failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
      }
 
    if(sellSignal)
      {
-      double sl = NormalizeDouble(bid + slDistance,digits);
-      double tp = NormalizeDouble(bid - tpDistance,digits);
+      double sl = NormalizePriceToTick(ask + slDistance);
+      double tp = NormalizePriceToTick(bid - tpDistance);
+      if(!AreStopsValid(false,sl,tp,bid,ask,minDistPrice))
+        {
+         DebugPrint("Skip SELL: invalid stop distance for broker rules");
+         return;
+        }
       if(!trade.Sell(lots,gTradeSymbol,0.0,sl,tp,"AI_EA_YOU SELL"))
          Print("Sell failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
      }
@@ -280,6 +333,9 @@ void ManageTrailingStop()
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
    if(point<=0.0)
       return;
+   int minStopPoints = GetMinStopPoints();
+   int trailPoints = MathMax(InpTrailingStopPoints,minStopPoints);
+   double minDistPrice = (double)minStopPoints * point;
 
    int digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
    double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
@@ -309,17 +365,21 @@ void ManageTrailingStop()
 
       if(posType==POSITION_TYPE_BUY)
         {
-         if((bid-openPrice) <= ((double)InpTrailingStopPoints * point))
+         if((bid-openPrice) <= ((double)trailPoints * point))
             continue;
-         double newSL = NormalizeDouble(bid - ((double)InpTrailingStopPoints * point),digits);
+         double newSL = NormalizePriceToTick(bid - ((double)trailPoints * point));
+         if((bid-newSL)<=minDistPrice)
+            continue;
          if(currSL==0.0 || newSL>currSL)
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
       else if(posType==POSITION_TYPE_SELL)
         {
-         if((openPrice-ask) <= ((double)InpTrailingStopPoints * point))
+         if((openPrice-ask) <= ((double)trailPoints * point))
             continue;
-         double newSL = NormalizeDouble(ask + ((double)InpTrailingStopPoints * point),digits);
+         double newSL = NormalizePriceToTick(ask + ((double)trailPoints * point));
+         if((newSL-ask)<=minDistPrice)
+            continue;
          if(currSL==0.0 || newSL<currSL)
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
