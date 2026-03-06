@@ -16,8 +16,11 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
-input double           InpRecoveryLossPercent = 5.0;
-input int              InpRecoveryCooldownBars= 1;
+input bool             InpUseRescueHedge      = true;
+input int              InpRescueTriggerPoints = 300;
+input int              InpRescueMinBars       = 5;
+input double           InpRescueLotMultiplier = 1.0;
+input double           InpRescueCloseNetMoney = 0.0;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -34,8 +37,6 @@ CTrade trade;
 
 string   gTradeSymbol = "";
 const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
-bool     gRecoveryPause = false;
-datetime gRecoveryPauseBarTime = 0;
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -83,127 +84,31 @@ double NormalizePriceToTick(const double price)
   }
 
 //+------------------------------------------------------------------+
-int CountEaPositions(double &floatingProfit,double &latestOpenPrice,int &basketType)
+double NormalizeVolume(const double rawLots)
   {
-   floatingProfit = 0.0;
-   latestOpenPrice = 0.0;
-   basketType = -1;
-   datetime latestOpenTime = 0;
-   int count = 0;
+   double minLot  = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_STEP);
 
-   int total = PositionsTotal();
-   for(int i=total-1; i>=0; i--)
+   if(minLot<=0.0 || maxLot<=0.0)
+      return(0.0);
+   if(lotStep<=0.0)
+      lotStep = minLot;
+
+   double lots = MathMax(minLot,MathMin(maxLot,rawLots));
+   lots = MathFloor(lots/lotStep)*lotStep;
+   if(lots<minLot)
+      lots = minLot;
+
+   int volDigits = 0;
+   double stepCheck = lotStep;
+   while(stepCheck < 1.0 && volDigits < 8)
      {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket==0)
-         continue;
-      if(!PositionSelectByTicket(ticket))
-         continue;
-
-      string sym = PositionGetString(POSITION_SYMBOL);
-      long mg = PositionGetInteger(POSITION_MAGIC);
-      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
-         continue;
-
-      int pType = (int)PositionGetInteger(POSITION_TYPE);
-      if(basketType==-1)
-         basketType = pType;
-      else if(basketType!=pType)
-         basketType = -2;
-
-      count++;
-      floatingProfit += PositionGetDouble(POSITION_PROFIT);
-      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
-      if(pTime>=latestOpenTime)
-        {
-         latestOpenTime = pTime;
-         latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-        }
+      stepCheck *= 10.0;
+      volDigits++;
      }
 
-   return(count);
-  }
-
-//+------------------------------------------------------------------+
-bool CloseAllEaPositions()
-  {
-   bool ok = true;
-   int total = PositionsTotal();
-   for(int i=total-1; i>=0; i--)
-     {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket==0)
-         continue;
-      if(!PositionSelectByTicket(ticket))
-         continue;
-
-      string sym = PositionGetString(POSITION_SYMBOL);
-      long mg = PositionGetInteger(POSITION_MAGIC);
-      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
-         continue;
-
-      if(!trade.PositionClose(ticket))
-        {
-         ok = false;
-         Print("Recovery close failed. Ticket=",ticket," RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-        }
-     }
-   return(ok);
-  }
-
-//+------------------------------------------------------------------+
-bool IsRecoveryPauseActive()
-  {
-   if(!gRecoveryPause)
-      return(false);
-
-   if(gRecoveryPauseBarTime<=0)
-     {
-      gRecoveryPause = false;
-      return(false);
-     }
-
-   int cooldownBars = MathMax(1,InpRecoveryCooldownBars);
-   int shift = iBarShift(gTradeSymbol,TRADE_TF,gRecoveryPauseBarTime,false);
-   if(shift < cooldownBars)
-      return(true);
-
-   gRecoveryPause = false;
-   gRecoveryPauseBarTime = 0;
-   DebugPrint("Recovery cooldown ended: trading resumed");
-   return(false);
-  }
-
-//+------------------------------------------------------------------+
-bool RunRecoveryGuard()
-  {
-   double floatingProfit = 0.0;
-   double latestOpenPrice = 0.0;
-   int basketType = -1;
-   int posCount = CountEaPositions(floatingProfit,latestOpenPrice,basketType);
-   if(posCount<=0)
-      return(false);
-
-   if(IsRecoveryPauseActive())
-      return(true);
-
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(balance<=0.0 || InpRecoveryLossPercent<=0.0)
-      return(false);
-
-   double lossPercent = (-floatingProfit / balance) * 100.0;
-   if(lossPercent < InpRecoveryLossPercent)
-      return(false);
-
-   DebugPrint("Recovery guard triggered: floating loss="+DoubleToString(lossPercent,2)+"%");
-   if(CloseAllEaPositions())
-     {
-      gRecoveryPause = true;
-      gRecoveryPauseBarTime = iTime(gTradeSymbol,TRADE_TF,0);
-      DebugPrint("All EA positions closed. Recovery cooldown started.");
-     }
-
-   return(true);
+   return(NormalizeDouble(lots,volDigits));
   }
 
 //+------------------------------------------------------------------+
@@ -239,12 +144,6 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   if(IsRecoveryPauseActive())
-      return;
-
-   if(RunRecoveryGuard())
-      return;
-
    if(InpUseTrailingStop)
       ManageTrailingStop();
 
@@ -279,15 +178,112 @@ void OnTick()
 
    int maxPositions = MathMax(1,InpMaxPositions);
    int addProfitPoints = MathMax(1,InpAddProfitPoints);
-   double floatingProfit = 0.0;
-   double latestOpenPrice = 0.0;
+   int posCount = 0;
    int basketType = -1;
-   int posCount = CountEaPositions(floatingProfit,latestOpenPrice,basketType);
+   double latestOpenPrice = 0.0;
+   datetime latestOpenTime = 0;
+   int buyCount = 0, sellCount = 0;
+   double buyVolume = 0.0, sellVolume = 0.0, floatingProfit = 0.0;
+   double latestBuyOpen = 0.0, latestSellOpen = 0.0;
+   datetime latestBuyTime = 0, latestSellTime = 0;
 
-   if(basketType==-2)
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
      {
-      DebugPrint("Skip: mixed BUY/SELL basket detected");
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long mg = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      int pType = (int)PositionGetInteger(POSITION_TYPE);
+      if(basketType==-1)
+         basketType = pType;
+      else if(basketType!=pType)
+         basketType = -2;
+      double pVol = PositionGetDouble(POSITION_VOLUME);
+      double pProfit = PositionGetDouble(POSITION_PROFIT);
+      floatingProfit += pProfit;
+
+      posCount++;
+      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(pTime>=latestOpenTime)
+        {
+         latestOpenTime = pTime;
+         latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        }
+
+      if(pType==POSITION_TYPE_BUY)
+        {
+         buyCount++;
+         buyVolume += pVol;
+         if(pTime>=latestBuyTime)
+           {
+            latestBuyTime = pTime;
+            latestBuyOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+           }
+        }
+      else if(pType==POSITION_TYPE_SELL)
+        {
+         sellCount++;
+         sellVolume += pVol;
+         if(pTime>=latestSellTime)
+           {
+            latestSellTime = pTime;
+            latestSellOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+           }
+        }
+     }
+
+   if(buyCount>0 && sellCount>0)
+     {
+      if(floatingProfit >= InpRescueCloseNetMoney)
+        {
+         if(CloseAllEaPositions())
+            DebugPrint("Rescue basket closed at net="+DoubleToString(floatingProfit,2));
+        }
       return;
+     }
+
+   if(InpUseRescueHedge && posCount<maxPositions && buyCount>0 && sellCount==0)
+     {
+      int barsOpen = iBarShift(gTradeSymbol,TRADE_TF,latestBuyTime,false);
+      double adversePoints = (latestBuyOpen - bid) / point;
+      if(barsOpen>=0 && adversePoints>=InpRescueTriggerPoints && barsOpen>=InpRescueMinBars)
+        {
+         double hedgeLots = NormalizeVolume(buyVolume * MathMax(0.1,InpRescueLotMultiplier));
+         if(hedgeLots>0.0)
+           {
+            if(!trade.Sell(hedgeLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE SELL"))
+               Print("Rescue SELL failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+            else
+               DebugPrint("Rescue SELL opened");
+           }
+         return;
+        }
+     }
+
+   if(InpUseRescueHedge && posCount<maxPositions && sellCount>0 && buyCount==0)
+     {
+      int barsOpen = iBarShift(gTradeSymbol,TRADE_TF,latestSellTime,false);
+      double adversePoints = (ask - latestSellOpen) / point;
+      if(barsOpen>=0 && adversePoints>=InpRescueTriggerPoints && barsOpen>=InpRescueMinBars)
+        {
+         double hedgeLots = NormalizeVolume(sellVolume * MathMax(0.1,InpRescueLotMultiplier));
+         if(hedgeLots>0.0)
+           {
+            if(!trade.Buy(hedgeLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE BUY"))
+               Print("Rescue BUY failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+            else
+               DebugPrint("Rescue BUY opened");
+           }
+         return;
+        }
      }
 
    if(posCount>=maxPositions)
@@ -400,6 +396,34 @@ bool HasPosition(int &type)
         }
      }
    return(false);
+  }
+
+//+------------------------------------------------------------------+
+bool CloseAllEaPositions()
+  {
+   bool ok = true;
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long   mg  = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      if(!trade.PositionClose(ticket))
+        {
+         ok = false;
+         Print("Close basket failed. Ticket=",ticket," RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+        }
+     }
+   return(ok);
   }
 
 //+------------------------------------------------------------------+
