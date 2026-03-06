@@ -21,7 +21,8 @@ input int              InpATRPeriod           = 14;
 input double           InpSL_ATR_Mult         = 2.0;
 input double           InpTP_ATR_Mult         = 3.0;
 input bool             InpUseTrailingStop     = true;
-input double           InpTrailATRMult        = 1.5;
+input int              InpTrailStepPoints     = 50;   // Every 50 points profit
+input int              InpTrailLockPoints     = 10;   // Lock 10 points each step
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -42,6 +43,7 @@ int      gRsiHandle  = INVALID_HANDLE;
 int      gAtrHandle  = INVALID_HANDLE;
 datetime gLastBarTime = 0;
 string   gTradeSymbol = "";
+const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -63,10 +65,10 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   gFastHandle = iMA(gTradeSymbol,InpTimeframe,InpFastEMA,0,MODE_EMA,PRICE_CLOSE);
-   gSlowHandle = iMA(gTradeSymbol,InpTimeframe,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE);
-   gRsiHandle  = iRSI(gTradeSymbol,InpTimeframe,InpRSIPeriod,PRICE_CLOSE);
-   gAtrHandle  = iATR(gTradeSymbol,InpTimeframe,InpATRPeriod);
+   gFastHandle = iMA(gTradeSymbol,TRADE_TF,InpFastEMA,0,MODE_EMA,PRICE_CLOSE);
+   gSlowHandle = iMA(gTradeSymbol,TRADE_TF,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE);
+   gRsiHandle  = iRSI(gTradeSymbol,TRADE_TF,InpRSIPeriod,PRICE_CLOSE);
+   gAtrHandle  = iATR(gTradeSymbol,TRADE_TF,InpATRPeriod);
 
    if(gFastHandle==INVALID_HANDLE || gSlowHandle==INVALID_HANDLE || gRsiHandle==INVALID_HANDLE || gAtrHandle==INVALID_HANDLE)
      {
@@ -76,7 +78,11 @@ int OnInit()
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(20);
-   DebugPrint("EA ready. Symbol="+gTradeSymbol+" TF="+EnumToString(InpTimeframe));
+   if(InpTimeframe!=PERIOD_M1)
+      DebugPrint("Info: EA is forced to M1. InpTimeframe is ignored.");
+   if(!InpOnePositionOnly)
+      DebugPrint("Info: one-position-only mode is forced ON. InpOnePositionOnly is ignored.");
+   DebugPrint("EA ready. Symbol="+gTradeSymbol+" TF="+EnumToString(TRADE_TF));
 
    return(INIT_SUCCEEDED);
   }
@@ -117,7 +123,7 @@ void OnTick()
    if(CopyBuffer(gSlowHandle,0,1,3,slow)<3)  return;
    if(CopyBuffer(gRsiHandle,0,1,3,rsi)<3)    return;
    if(CopyBuffer(gAtrHandle,0,1,3,atr)<3)    return;
-   if(CopyClose(gTradeSymbol,InpTimeframe,1,3,closeArr)<3) return;
+   if(CopyClose(gTradeSymbol,TRADE_TF,1,3,closeArr)<3) return;
 
    bool buyCross  = (fast[1] <= slow[1] && fast[0] > slow[0]);
    bool sellCross = (fast[1] >= slow[1] && fast[0] < slow[0]);
@@ -138,9 +144,9 @@ void OnTick()
         }
      }
 
-   if(InpOnePositionOnly && hasPos)
+   if(hasPos)
      {
-      DebugPrint("Skip: already has position");
+      DebugPrint("Skip: already has position (one order at a time)");
       return;
      }
 
@@ -184,7 +190,7 @@ void OnTick()
 //+------------------------------------------------------------------+
 bool IsNewBar()
   {
-   datetime t = iTime(gTradeSymbol,InpTimeframe,0);
+   datetime t = iTime(gTradeSymbol,TRADE_TF,0);
    if(t<=0)
       return(false);
 
@@ -308,15 +314,13 @@ double CalculateLots(double slDistancePrice)
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
   {
-   double atr[2];
-   if(CopyBuffer(gAtrHandle,0,1,2,atr)<2)
+   if(InpTrailStepPoints<=0 || InpTrailLockPoints<=0)
       return;
 
-   double atrNow = atr[0];
-   if(atrNow<=0.0)
+   double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
+   if(point<=0.0)
       return;
 
-   double trailDist = atrNow * InpTrailATRMult;
    int digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
    double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
    double ask = SymbolInfoDouble(gTradeSymbol,SYMBOL_ASK);
@@ -337,18 +341,33 @@ void ManageTrailingStop()
          continue;
 
       long posType = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double currSL = PositionGetDouble(POSITION_SL);
       double currTP = PositionGetDouble(POSITION_TP);
+      if(openPrice<=0.0)
+         continue;
 
       if(posType==POSITION_TYPE_BUY)
         {
-         double newSL = NormalizeDouble(bid - trailDist,digits);
+         double profitPoints = (bid - openPrice) / point;
+         int steps = (int)MathFloor(profitPoints / InpTrailStepPoints);
+         if(steps<=0)
+            continue;
+
+         double lockPoints = steps * InpTrailLockPoints;
+         double newSL = NormalizeDouble(openPrice + (lockPoints * point),digits);
          if(currSL==0.0 || newSL>currSL)
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
       else if(posType==POSITION_TYPE_SELL)
         {
-         double newSL = NormalizeDouble(ask + trailDist,digits);
+         double profitPoints = (openPrice - ask) / point;
+         int steps = (int)MathFloor(profitPoints / InpTrailStepPoints);
+         if(steps<=0)
+            continue;
+
+         double lockPoints = steps * InpTrailLockPoints;
+         double newSL = NormalizeDouble(openPrice - (lockPoints * point),digits);
          if(currSL==0.0 || newSL<currSL)
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
