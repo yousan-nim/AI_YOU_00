@@ -16,6 +16,7 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
+input double           InpCutLossPercent      = 5.0;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -150,6 +151,7 @@ void OnTick()
    int basketType = -1;
    double latestOpenPrice = 0.0;
    datetime latestOpenTime = 0;
+   double floatingProfit = 0.0;
 
    int total = PositionsTotal();
    for(int i=total-1; i>=0; i--)
@@ -175,11 +177,28 @@ void OnTick()
         }
 
       posCount++;
+      floatingProfit += PositionGetDouble(POSITION_PROFIT);
       datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
       if(pTime>=latestOpenTime)
         {
          latestOpenTime = pTime;
          latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        }
+     }
+
+   if(posCount>0 && InpCutLossPercent>0.0)
+     {
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      if(balance>0.0)
+        {
+         double lossPercent = (-floatingProfit / balance) * 100.0;
+         if(lossPercent >= InpCutLossPercent)
+           {
+            DebugPrint("CutLoss triggered: floating loss="+DoubleToString(lossPercent,2)+"%");
+            if(!CloseAllEaPositions())
+               Print("CutLoss close all failed");
+            return;
+           }
         }
      }
 
@@ -293,6 +312,34 @@ bool HasPosition(int &type)
         }
      }
    return(false);
+  }
+
+//+------------------------------------------------------------------+
+bool CloseAllEaPositions()
+  {
+   bool ok = true;
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long   mg  = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      if(!trade.PositionClose(ticket))
+        {
+         ok = false;
+         Print("Close all failed. Ticket=",ticket," RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+        }
+     }
+   return(ok);
   }
 
 //+------------------------------------------------------------------+
