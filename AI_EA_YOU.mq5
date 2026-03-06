@@ -12,7 +12,7 @@ input string           InpSymbol              = "XAUUSD";
 input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
 input bool             InpUseTrailingStop     = true;
-input int              InpTakeProfitPoints    = 100;
+input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
 
 input double           InpRiskPercent         = 1.0;
@@ -30,6 +30,7 @@ CTrade trade;
 
 string   gTradeSymbol = "";
 const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
+datetime gLastBarTime = 0;
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -111,6 +112,18 @@ void OnTick()
   {
    if(InpUseTrailingStop)
       ManageTrailingStop();
+
+   if(IsNewMinuteBar())
+     {
+      int posType = -1;
+      if(HasPosition(posType))
+        {
+         if(!trade.PositionClose(gTradeSymbol))
+            Print("Minute close failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+         else
+            DebugPrint("Minute ended: closed current position");
+        }
+     }
 
    if(!IsTradingHour())
      {
@@ -198,6 +211,28 @@ void OnTick()
          Print("Sell failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
      }
 
+  }
+
+//+------------------------------------------------------------------+
+bool IsNewMinuteBar()
+  {
+   datetime barTime = iTime(gTradeSymbol,TRADE_TF,0);
+   if(barTime<=0)
+      return(false);
+
+   if(gLastBarTime==0)
+     {
+      gLastBarTime = barTime;
+      return(false);
+     }
+
+   if(barTime!=gLastBarTime)
+     {
+      gLastBarTime = barTime;
+      return(true);
+     }
+
+   return(false);
   }
 
 //+------------------------------------------------------------------+
