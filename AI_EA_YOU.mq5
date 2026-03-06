@@ -16,11 +16,6 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
-input bool             InpUseRescueHedge      = true;
-input int              InpRescueTriggerPoints = 300;
-input int              InpRescueMinBars       = 5;
-input double           InpRescueLotMultiplier = 1.0;
-input double           InpRescueCloseNetMoney = 0.0;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -84,34 +79,6 @@ double NormalizePriceToTick(const double price)
   }
 
 //+------------------------------------------------------------------+
-double NormalizeVolume(const double rawLots)
-  {
-   double minLot  = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_MIN);
-   double maxLot  = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_STEP);
-
-   if(minLot<=0.0 || maxLot<=0.0)
-      return(0.0);
-   if(lotStep<=0.0)
-      lotStep = minLot;
-
-   double lots = MathMax(minLot,MathMin(maxLot,rawLots));
-   lots = MathFloor(lots/lotStep)*lotStep;
-   if(lots<minLot)
-      lots = minLot;
-
-   int volDigits = 0;
-   double stepCheck = lotStep;
-   while(stepCheck < 1.0 && volDigits < 8)
-     {
-      stepCheck *= 10.0;
-      volDigits++;
-     }
-
-   return(NormalizeDouble(lots,volDigits));
-  }
-
-//+------------------------------------------------------------------+
 int OnInit()
   {
    gTradeSymbol = InpSymbol;
@@ -172,6 +139,7 @@ void OnTick()
    if(!buySignal && !sellSignal)
       return;
 
+   int    digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
    if(point<=0.0)
       return;
@@ -182,10 +150,6 @@ void OnTick()
    int basketType = -1;
    double latestOpenPrice = 0.0;
    datetime latestOpenTime = 0;
-   int buyCount = 0, sellCount = 0;
-   double buyVolume = 0.0, sellVolume = 0.0, floatingProfit = 0.0;
-   double latestBuyOpen = 0.0, latestSellOpen = 0.0;
-   datetime latestBuyTime = 0, latestSellTime = 0;
 
    int total = PositionsTotal();
    for(int i=total-1; i>=0; i--)
@@ -202,9 +166,13 @@ void OnTick()
          continue;
 
       int pType = (int)PositionGetInteger(POSITION_TYPE);
-      double pVol = PositionGetDouble(POSITION_VOLUME);
-      double pProfit = PositionGetDouble(POSITION_PROFIT);
-      floatingProfit += pProfit;
+      if(basketType==-1)
+         basketType = pType;
+      else if(basketType!=pType)
+        {
+         DebugPrint("Skip: mixed BUY/SELL basket detected");
+         return;
+        }
 
       posCount++;
       datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
@@ -212,73 +180,6 @@ void OnTick()
         {
          latestOpenTime = pTime;
          latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-        }
-
-      if(pType==POSITION_TYPE_BUY)
-        {
-         buyCount++;
-         buyVolume += pVol;
-         if(pTime>=latestBuyTime)
-           {
-            latestBuyTime = pTime;
-            latestBuyOpen = PositionGetDouble(POSITION_PRICE_OPEN);
-           }
-        }
-      else if(pType==POSITION_TYPE_SELL)
-        {
-         sellCount++;
-         sellVolume += pVol;
-         if(pTime>=latestSellTime)
-           {
-            latestSellTime = pTime;
-            latestSellOpen = PositionGetDouble(POSITION_PRICE_OPEN);
-           }
-        }
-     }
-
-   if(buyCount>0 && sellCount>0)
-     {
-      if(floatingProfit >= InpRescueCloseNetMoney)
-        {
-         if(CloseAllEaPositions())
-            DebugPrint("Rescue basket closed at net="+DoubleToString(floatingProfit,2));
-        }
-      return;
-     }
-
-   if(InpUseRescueHedge && posCount<maxPositions && buyCount>0 && sellCount==0)
-     {
-      int barsOpen = iBarShift(gTradeSymbol,TRADE_TF,latestBuyTime,false);
-      double adversePoints = (latestBuyOpen - bid) / point;
-      if(barsOpen>=0 && adversePoints>=InpRescueTriggerPoints && barsOpen>=InpRescueMinBars)
-        {
-         double hedgeLots = NormalizeVolume(buyVolume * MathMax(0.1,InpRescueLotMultiplier));
-         if(hedgeLots>0.0)
-           {
-            if(!trade.Sell(hedgeLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE SELL"))
-               Print("Rescue SELL failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-            else
-               DebugPrint("Rescue SELL opened");
-           }
-         return;
-        }
-     }
-
-   if(InpUseRescueHedge && posCount<maxPositions && sellCount>0 && buyCount==0)
-     {
-      int barsOpen = iBarShift(gTradeSymbol,TRADE_TF,latestSellTime,false);
-      double adversePoints = (ask - latestSellOpen) / point;
-      if(barsOpen>=0 && adversePoints>=InpRescueTriggerPoints && barsOpen>=InpRescueMinBars)
-        {
-         double hedgeLots = NormalizeVolume(sellVolume * MathMax(0.1,InpRescueLotMultiplier));
-         if(hedgeLots>0.0)
-           {
-            if(!trade.Buy(hedgeLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE BUY"))
-               Print("Rescue BUY failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-            else
-               DebugPrint("Rescue BUY opened");
-           }
-         return;
         }
      }
 
@@ -392,34 +293,6 @@ bool HasPosition(int &type)
         }
      }
    return(false);
-  }
-
-//+------------------------------------------------------------------+
-bool CloseAllEaPositions()
-  {
-   bool ok = true;
-   int total = PositionsTotal();
-   for(int i=total-1; i>=0; i--)
-     {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket==0)
-         continue;
-
-      if(!PositionSelectByTicket(ticket))
-         continue;
-
-      string sym = PositionGetString(POSITION_SYMBOL);
-      long   mg  = PositionGetInteger(POSITION_MAGIC);
-      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
-         continue;
-
-      if(!trade.PositionClose(ticket))
-        {
-         ok = false;
-         Print("Close basket failed. Ticket=",ticket," RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-        }
-     }
-   return(ok);
   }
 
 //+------------------------------------------------------------------+
