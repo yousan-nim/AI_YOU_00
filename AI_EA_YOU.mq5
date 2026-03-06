@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                    AI_EA_YOU.mq5 |
-//|                       Simple XAUUSD Trend EA (EMA + RSI + ATR)   |
+//|                       Simple XAUUSD Trend EA (EMA 9/50/200)       |
 //+------------------------------------------------------------------+
 #property copyright "2026"
 #property version   "1.00"
@@ -11,18 +11,12 @@
 input string           InpSymbol              = "XAUUSD";
 input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
-input int              InpFastEMA             = 9;
-input int              InpSlowEMA             = 21;
-input int              InpRSIPeriod           = 14;
-input double           InpRSIBuyMin           = 52.0;
-input double           InpRSISellMax          = 48.0;
-
-input int              InpATRPeriod           = 14;
-input double           InpSL_ATR_Mult         = 2.0;
-input double           InpTP_ATR_Mult         = 3.0;
+input int              InpEMAFast             = 9;
+input int              InpEMAMid              = 50;
+input int              InpEMASlow             = 200;
 input bool             InpUseTrailingStop     = true;
-input int              InpTrailStepPoints     = 50;   // Every 50 points profit
-input int              InpTrailLockPoints     = 10;   // Lock 10 points each step
+input int              InpTakeProfitPoints    = 50;
+input int              InpTrailingStopPoints  = 10;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -38,10 +32,8 @@ input int              InpEndHour             = 23;
 CTrade trade;
 
 int      gFastHandle = INVALID_HANDLE;
+int      gMidHandle  = INVALID_HANDLE;
 int      gSlowHandle = INVALID_HANDLE;
-int      gRsiHandle  = INVALID_HANDLE;
-int      gAtrHandle  = INVALID_HANDLE;
-datetime gLastBarTime = 0;
 string   gTradeSymbol = "";
 const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
 
@@ -65,12 +57,11 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   gFastHandle = iMA(gTradeSymbol,TRADE_TF,InpFastEMA,0,MODE_EMA,PRICE_CLOSE);
-   gSlowHandle = iMA(gTradeSymbol,TRADE_TF,InpSlowEMA,0,MODE_EMA,PRICE_CLOSE);
-   gRsiHandle  = iRSI(gTradeSymbol,TRADE_TF,InpRSIPeriod,PRICE_CLOSE);
-   gAtrHandle  = iATR(gTradeSymbol,TRADE_TF,InpATRPeriod);
+   gFastHandle = iMA(gTradeSymbol,TRADE_TF,InpEMAFast,0,MODE_EMA,PRICE_CLOSE);
+   gMidHandle  = iMA(gTradeSymbol,TRADE_TF,InpEMAMid,0,MODE_EMA,PRICE_CLOSE);
+   gSlowHandle = iMA(gTradeSymbol,TRADE_TF,InpEMASlow,0,MODE_EMA,PRICE_CLOSE);
 
-   if(gFastHandle==INVALID_HANDLE || gSlowHandle==INVALID_HANDLE || gRsiHandle==INVALID_HANDLE || gAtrHandle==INVALID_HANDLE)
+   if(gFastHandle==INVALID_HANDLE || gMidHandle==INVALID_HANDLE || gSlowHandle==INVALID_HANDLE)
      {
       Print("Indicator handle creation failed.");
       return(INIT_FAILED);
@@ -91,9 +82,8 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    if(gFastHandle!=INVALID_HANDLE) IndicatorRelease(gFastHandle);
+   if(gMidHandle!=INVALID_HANDLE)  IndicatorRelease(gMidHandle);
    if(gSlowHandle!=INVALID_HANDLE) IndicatorRelease(gSlowHandle);
-   if(gRsiHandle!=INVALID_HANDLE)  IndicatorRelease(gRsiHandle);
-   if(gAtrHandle!=INVALID_HANDLE)  IndicatorRelease(gAtrHandle);
   }
 
 //+------------------------------------------------------------------+
@@ -101,9 +91,6 @@ void OnTick()
   {
    if(InpUseTrailingStop)
       ManageTrailingStop();
-
-   if(!IsNewBar())
-      return;
 
    if(!IsTradingHour())
      {
@@ -118,18 +105,17 @@ void OnTick()
       return;
      }
 
-   double fast[3], slow[3], rsi[3], atr[3], closeArr[3];
-   if(CopyBuffer(gFastHandle,0,1,3,fast)<3)  return;
-   if(CopyBuffer(gSlowHandle,0,1,3,slow)<3)  return;
-   if(CopyBuffer(gRsiHandle,0,1,3,rsi)<3)    return;
-   if(CopyBuffer(gAtrHandle,0,1,3,atr)<3)    return;
-   if(CopyClose(gTradeSymbol,TRADE_TF,1,3,closeArr)<3) return;
+   double fast[1], mid[1], slow[1];
+   if(CopyBuffer(gFastHandle,0,0,1,fast)<1)  return;
+   if(CopyBuffer(gMidHandle,0,0,1,mid)<1)    return;
+   if(CopyBuffer(gSlowHandle,0,0,1,slow)<1)  return;
 
-   bool buyCross  = (fast[1] <= slow[1] && fast[0] > slow[0]);
-   bool sellCross = (fast[1] >= slow[1] && fast[0] < slow[0]);
+   double ask = SymbolInfoDouble(gTradeSymbol,SYMBOL_ASK);
+   double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
+   double refPrice = (ask + bid) * 0.5;
 
-   bool buySignal  = buyCross  && rsi[0] >= InpRSIBuyMin  && closeArr[0] > fast[0];
-   bool sellSignal = sellCross && rsi[0] <= InpRSISellMax && closeArr[0] < fast[0];
+   bool buySignal  = (refPrice > slow[0] && fast[0] > mid[0] && mid[0] > slow[0]);
+   bool sellSignal = (refPrice < slow[0] && fast[0] < mid[0] && mid[0] < slow[0]);
 
    int posType = -1;
    bool hasPos = HasPosition(posType);
@@ -139,8 +125,11 @@ void OnTick()
       if((posType==POSITION_TYPE_BUY && sellSignal) || (posType==POSITION_TYPE_SELL && buySignal))
         {
          if(!trade.PositionClose(gTradeSymbol))
+           {
             Print("Close on reverse failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-         return;
+            return;
+           }
+         hasPos = false;
         }
      }
 
@@ -151,15 +140,12 @@ void OnTick()
      }
 
    int    digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
-   double ask = SymbolInfoDouble(gTradeSymbol,SYMBOL_ASK);
-   double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
-
-   double atrNow = atr[0];
-   if(atrNow<=0.0)
+   double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
+   if(point<=0.0)
       return;
 
-   double slDistance = atrNow * InpSL_ATR_Mult;
-   double tpDistance = atrNow * InpTP_ATR_Mult;
+   double slDistance = (double)InpTrailingStopPoints * point;
+   double tpDistance = (double)InpTakeProfitPoints * point;
    double lots = CalculateLots(slDistance);
    if(lots<=0.0)
      {
@@ -183,22 +169,6 @@ void OnTick()
          Print("Sell failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
      }
 
-   if(!buySignal && !sellSignal)
-      DebugPrint("No signal this bar");
-  }
-
-//+------------------------------------------------------------------+
-bool IsNewBar()
-  {
-   datetime t = iTime(gTradeSymbol,TRADE_TF,0);
-   if(t<=0)
-      return(false);
-
-   if(t==gLastBarTime)
-      return(false);
-
-   gLastBarTime = t;
-   return(true);
   }
 
 //+------------------------------------------------------------------+
@@ -314,7 +284,7 @@ double CalculateLots(double slDistancePrice)
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
   {
-   if(InpTrailStepPoints<=0 || InpTrailLockPoints<=0)
+   if(InpTrailingStopPoints<=0)
       return;
 
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
@@ -349,25 +319,17 @@ void ManageTrailingStop()
 
       if(posType==POSITION_TYPE_BUY)
         {
-         double profitPoints = (bid - openPrice) / point;
-         int steps = (int)MathFloor(profitPoints / InpTrailStepPoints);
-         if(steps<=0)
+         if((bid-openPrice) <= ((double)InpTrailingStopPoints * point))
             continue;
-
-         double lockPoints = steps * InpTrailLockPoints;
-         double newSL = NormalizeDouble(openPrice + (lockPoints * point),digits);
+         double newSL = NormalizeDouble(bid - ((double)InpTrailingStopPoints * point),digits);
          if(currSL==0.0 || newSL>currSL)
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
       else if(posType==POSITION_TYPE_SELL)
         {
-         double profitPoints = (openPrice - ask) / point;
-         int steps = (int)MathFloor(profitPoints / InpTrailStepPoints);
-         if(steps<=0)
+         if((openPrice-ask) <= ((double)InpTrailingStopPoints * point))
             continue;
-
-         double lockPoints = steps * InpTrailLockPoints;
-         double newSL = NormalizeDouble(openPrice - (lockPoints * point),digits);
+         double newSL = NormalizeDouble(ask + ((double)InpTrailingStopPoints * point),digits);
          if(currSL==0.0 || newSL<currSL)
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
