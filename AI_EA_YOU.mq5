@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                    AI_EA_YOU.mq5 |
-//|                        Simple XAUUSD Trend EA (EMA 9/50)          |
+//|                 Simple XAUUSD Direction EA (Prev-Candle Price)    |
 //+------------------------------------------------------------------+
 #property copyright "2026"
 #property version   "1.00"
@@ -11,10 +11,8 @@
 input string           InpSymbol              = "XAUUSD";
 input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
-input int              InpEMAFast             = 9;
-input int              InpEMAMid              = 50;
 input bool             InpUseTrailingStop     = true;
-input int              InpTakeProfitPoints    = 50;
+input int              InpTakeProfitPoints    = 100;
 input int              InpTrailingStopPoints  = 10;
 
 input double           InpRiskPercent         = 1.0;
@@ -30,8 +28,6 @@ input int              InpEndHour             = 23;
 
 CTrade trade;
 
-int      gFastHandle = INVALID_HANDLE;
-int      gMidHandle  = INVALID_HANDLE;
 string   gTradeSymbol = "";
 const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
 
@@ -93,15 +89,6 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   gFastHandle = iMA(gTradeSymbol,TRADE_TF,InpEMAFast,0,MODE_EMA,PRICE_CLOSE);
-   gMidHandle  = iMA(gTradeSymbol,TRADE_TF,InpEMAMid,0,MODE_EMA,PRICE_CLOSE);
-
-   if(gFastHandle==INVALID_HANDLE || gMidHandle==INVALID_HANDLE)
-     {
-      Print("Indicator handle creation failed.");
-      return(INIT_FAILED);
-     }
-
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(20);
    if(InpTimeframe!=PERIOD_M1)
@@ -117,8 +104,6 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   if(gFastHandle!=INVALID_HANDLE) IndicatorRelease(gFastHandle);
-   if(gMidHandle!=INVALID_HANDLE)  IndicatorRelease(gMidHandle);
   }
 
 //+------------------------------------------------------------------+
@@ -140,16 +125,15 @@ void OnTick()
       return;
      }
 
-   double fast[1], mid[1];
-   if(CopyBuffer(gFastHandle,0,0,1,fast)<1)  return;
-   if(CopyBuffer(gMidHandle,0,0,1,mid)<1)    return;
-
    double ask = SymbolInfoDouble(gTradeSymbol,SYMBOL_ASK);
    double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
    double refPrice = (ask + bid) * 0.5;
+   double prevClose = iClose(gTradeSymbol,TRADE_TF,1);
+   if(prevClose<=0.0)
+      return;
 
-   bool buySignal  = (refPrice > mid[0] && fast[0] > mid[0]);
-   bool sellSignal = (refPrice < mid[0] && fast[0] < mid[0]);
+   bool buySignal  = (refPrice > prevClose);
+   bool sellSignal = (refPrice < prevClose);
 
    int posType = -1;
    bool hasPos = HasPosition(posType);
