@@ -12,6 +12,8 @@ input string           InpSymbol              = "XAUUSD";
 input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
 input bool             InpUseTrailingStop     = true;
+input int              InpMaxPositions        = 5;
+input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
 
@@ -30,7 +32,6 @@ CTrade trade;
 
 string   gTradeSymbol = "";
 const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
-datetime gLastBarTime = 0;
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -113,18 +114,6 @@ void OnTick()
    if(InpUseTrailingStop)
       ManageTrailingStop();
 
-   if(IsNewMinuteBar())
-     {
-      int posType = -1;
-      if(HasPosition(posType))
-        {
-         if(!trade.PositionClose(gTradeSymbol))
-            Print("Minute close failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-         else
-            DebugPrint("Minute ended: closed current position");
-        }
-     }
-
    if(!IsTradingHour())
      {
       DebugPrint("Skip: out of trading hour");
@@ -147,47 +136,89 @@ void OnTick()
 
    bool buySignal  = (refPrice > prevClose);
    bool sellSignal = (refPrice < prevClose);
-
-   int posType = -1;
-   bool hasPos = HasPosition(posType);
-
-   if(hasPos && InpCloseOnReverse)
-     {
-      if((posType==POSITION_TYPE_BUY && sellSignal) || (posType==POSITION_TYPE_SELL && buySignal))
-        {
-         if(!trade.PositionClose(gTradeSymbol))
-           {
-            Print("Close on reverse failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
-            return;
-           }
-         hasPos = false;
-        }
-     }
-
-   if(hasPos)
-     {
-      DebugPrint("Skip: already has position (one order at a time)");
+   if(!buySignal && !sellSignal)
       return;
-     }
 
    int    digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
    if(point<=0.0)
       return;
 
+   int maxPositions = MathMax(1,InpMaxPositions);
+   int addProfitPoints = MathMax(1,InpAddProfitPoints);
+   int posCount = 0;
+   int basketType = -1;
+   double latestOpenPrice = 0.0;
+   datetime latestOpenTime = 0;
+
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long mg = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      int pType = (int)PositionGetInteger(POSITION_TYPE);
+      if(basketType==-1)
+         basketType = pType;
+      else if(basketType!=pType)
+        {
+         DebugPrint("Skip: mixed BUY/SELL basket detected");
+         return;
+        }
+
+      posCount++;
+      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(pTime>=latestOpenTime)
+        {
+         latestOpenTime = pTime;
+         latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        }
+     }
+
+   if(posCount>=maxPositions)
+     {
+      DebugPrint("Skip: max positions reached ("+IntegerToString(maxPositions)+")");
+      return;
+     }
+
+   if(posCount>0)
+     {
+      if((basketType==POSITION_TYPE_BUY && !buySignal) || (basketType==POSITION_TYPE_SELL && !sellSignal))
+        {
+         DebugPrint("Skip: existing basket direction is opposite to signal");
+         return;
+        }
+
+      double progressPoints = 0.0;
+      if(basketType==POSITION_TYPE_BUY)
+         progressPoints = (bid - latestOpenPrice) / point;
+      else if(basketType==POSITION_TYPE_SELL)
+         progressPoints = (latestOpenPrice - ask) / point;
+
+      if(progressPoints < addProfitPoints)
+        {
+         DebugPrint("Skip: last position profit < "+IntegerToString(addProfitPoints)+" points");
+         return;
+        }
+     }
+
    int minStopPoints = GetMinStopPoints();
    int tpPoints = MathMax(InpTakeProfitPoints,minStopPoints);
    double tpDistance = (double)tpPoints * point;
    double minDistPrice = (double)minStopPoints * point;
    double lots = 0.01;
-   double candleHigh = iHigh(gTradeSymbol,TRADE_TF,0);
-   double candleLow  = iLow(gTradeSymbol,TRADE_TF,0);
-   if(candleHigh<=0.0 || candleLow<=0.0 || candleHigh<=candleLow)
-      return;
 
    if(buySignal)
      {
-      double sl = NormalizePriceToTick(candleLow);
+      double sl = 0.0;
       double tp = NormalizePriceToTick(ask + tpDistance);
       if(!AreStopsValid(true,sl,tp,bid,ask,minDistPrice))
         {
@@ -200,7 +231,7 @@ void OnTick()
 
    if(sellSignal)
      {
-      double sl = NormalizePriceToTick(candleHigh);
+      double sl = 0.0;
       double tp = NormalizePriceToTick(bid - tpDistance);
       if(!AreStopsValid(false,sl,tp,bid,ask,minDistPrice))
         {
@@ -211,28 +242,6 @@ void OnTick()
          Print("Sell failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
      }
 
-  }
-
-//+------------------------------------------------------------------+
-bool IsNewMinuteBar()
-  {
-   datetime barTime = iTime(gTradeSymbol,TRADE_TF,0);
-   if(barTime<=0)
-      return(false);
-
-   if(gLastBarTime==0)
-     {
-      gLastBarTime = barTime;
-      return(false);
-     }
-
-   if(barTime!=gLastBarTime)
-     {
-      gLastBarTime = barTime;
-      return(true);
-     }
-
-   return(false);
   }
 
 //+------------------------------------------------------------------+
