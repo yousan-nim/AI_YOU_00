@@ -13,7 +13,6 @@ input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
 input bool             InpUseTrailingStop     = true;
 input int              InpTakeProfitPoints    = 100;
-input int              InpStopLossPoints      = 500;
 input int              InpTrailingStopPoints  = 10;
 
 input double           InpRiskPercent         = 1.0;
@@ -164,16 +163,18 @@ void OnTick()
       return;
 
    int minStopPoints = GetMinStopPoints();
-   int slPoints = MathMax(InpStopLossPoints,minStopPoints);
    int tpPoints = MathMax(InpTakeProfitPoints,minStopPoints);
-   double slDistance = (double)slPoints * point;
    double tpDistance = (double)tpPoints * point;
    double minDistPrice = (double)minStopPoints * point;
    double lots = 0.01;
+   double candleHigh = iHigh(gTradeSymbol,TRADE_TF,0);
+   double candleLow  = iLow(gTradeSymbol,TRADE_TF,0);
+   if(candleHigh<=0.0 || candleLow<=0.0 || candleHigh<=candleLow)
+      return;
 
    if(buySignal)
      {
-      double sl = NormalizePriceToTick(bid - slDistance);
+      double sl = NormalizePriceToTick(candleLow);
       double tp = NormalizePriceToTick(ask + tpDistance);
       if(!AreStopsValid(true,sl,tp,bid,ask,minDistPrice))
         {
@@ -186,7 +187,7 @@ void OnTick()
 
    if(sellSignal)
      {
-      double sl = NormalizePriceToTick(ask + slDistance);
+      double sl = NormalizePriceToTick(candleHigh);
       double tp = NormalizePriceToTick(bid - tpDistance);
       if(!AreStopsValid(false,sl,tp,bid,ask,minDistPrice))
         {
