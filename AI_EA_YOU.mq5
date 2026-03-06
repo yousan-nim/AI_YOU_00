@@ -16,7 +16,7 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
-input double           InpCutLossPercent      = 2.0;
+input double           InpCutLossPercent      = 8.0;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -77,6 +77,48 @@ double NormalizePriceToTick(const double price)
    double steps = MathRound(price/tickSize);
    double normalized = steps*tickSize;
    return(NormalizeDouble(normalized,digits));
+  }
+
+//+------------------------------------------------------------------+
+double NormalizeVolumeToStep(const double rawLots)
+  {
+   double minLot  = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(gTradeSymbol,SYMBOL_VOLUME_STEP);
+   if(minLot<=0.0 || maxLot<=0.0)
+      return(0.0);
+   if(lotStep<=0.0)
+      lotStep = minLot;
+
+   double lots = MathMax(minLot,MathMin(maxLot,rawLots));
+   lots = MathFloor(lots/lotStep)*lotStep;
+   if(lots<minLot)
+      lots = minLot;
+
+   int volDigits = 0;
+   double stepCheck = lotStep;
+   while(stepCheck < 1.0 && volDigits < 8)
+     {
+      stepCheck *= 10.0;
+      volDigits++;
+     }
+   return(NormalizeDouble(lots,volDigits));
+  }
+
+//+------------------------------------------------------------------+
+double GetDynamicLotsByBalance()
+  {
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double rawLots = 0.01;
+
+   // Requested ladder example: 1000 => 0.02, 3000 => 0.03, 5000 => 0.04, ...
+   if(balance>=1000.0)
+     {
+      int tier = 1 + (int)MathFloor((balance-1000.0)/2000.0);
+      rawLots = 0.01 + (0.01 * tier);
+     }
+
+   return(NormalizeVolumeToStep(rawLots));
   }
 
 //+------------------------------------------------------------------+
@@ -233,7 +275,12 @@ void OnTick()
    int tpPoints = MathMax(InpTakeProfitPoints,minStopPoints);
    double tpDistance = (double)tpPoints * point;
    double minDistPrice = (double)minStopPoints * point;
-   double lots = 0.01;
+   double lots = GetDynamicLotsByBalance();
+   if(lots<=0.0)
+     {
+      DebugPrint("Skip: invalid dynamic lot size");
+      return;
+     }
 
    if(buySignal)
      {
