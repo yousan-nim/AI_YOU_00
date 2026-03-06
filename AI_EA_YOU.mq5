@@ -17,7 +17,7 @@ input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
 input double           InpCutLossPercent      = 8.0;
-input int              InpRescueTriggerPoints = 200;
+input int              InpRescueTriggerPoints = 100;
 input double           InpRescueLotMultiplier = 2.0;
 input double           InpRescueCloseNetMoney = 0.0;
 
@@ -340,7 +340,7 @@ void OnTick()
       return;
      }
 
-   if(worstLosingTicket!=0 && worstLosingPoints>=InpRescueTriggerPoints && posCount<maxPositions)
+   if(worstLosingTicket!=0 && worstLosingPoints>=InpRescueTriggerPoints)
      {
       double rescueLots = NormalizeVolumeToStep(worstLosingLots * MathMax(0.1,InpRescueLotMultiplier));
       if(rescueLots>0.0)
@@ -359,6 +359,10 @@ void OnTick()
             else
                DebugPrint("Rescue BUY opened for losing SELL");
            }
+        }
+      else
+        {
+         DebugPrint("Rescue skipped: invalid rescue lot size");
         }
       return;
      }
