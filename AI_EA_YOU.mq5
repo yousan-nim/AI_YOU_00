@@ -16,6 +16,8 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
+input double           InpRecoveryLossPercent = 5.0;
+input int              InpRecoveryCooldownBars= 1;
 
 input double           InpRiskPercent         = 1.0;
 input int              InpMaxSpreadPoints     = 3000;
@@ -32,6 +34,8 @@ CTrade trade;
 
 string   gTradeSymbol = "";
 const ENUM_TIMEFRAMES  TRADE_TF = PERIOD_M1;
+bool     gRecoveryPause = false;
+datetime gRecoveryPauseBarTime = 0;
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -79,6 +83,130 @@ double NormalizePriceToTick(const double price)
   }
 
 //+------------------------------------------------------------------+
+int CountEaPositions(double &floatingProfit,double &latestOpenPrice,int &basketType)
+  {
+   floatingProfit = 0.0;
+   latestOpenPrice = 0.0;
+   basketType = -1;
+   datetime latestOpenTime = 0;
+   int count = 0;
+
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long mg = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      int pType = (int)PositionGetInteger(POSITION_TYPE);
+      if(basketType==-1)
+         basketType = pType;
+      else if(basketType!=pType)
+         basketType = -2;
+
+      count++;
+      floatingProfit += PositionGetDouble(POSITION_PROFIT);
+      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(pTime>=latestOpenTime)
+        {
+         latestOpenTime = pTime;
+         latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        }
+     }
+
+   return(count);
+  }
+
+//+------------------------------------------------------------------+
+bool CloseAllEaPositions()
+  {
+   bool ok = true;
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long mg = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      if(!trade.PositionClose(ticket))
+        {
+         ok = false;
+         Print("Recovery close failed. Ticket=",ticket," RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+        }
+     }
+   return(ok);
+  }
+
+//+------------------------------------------------------------------+
+bool IsRecoveryPauseActive()
+  {
+   if(!gRecoveryPause)
+      return(false);
+
+   if(gRecoveryPauseBarTime<=0)
+     {
+      gRecoveryPause = false;
+      return(false);
+     }
+
+   int cooldownBars = MathMax(1,InpRecoveryCooldownBars);
+   int shift = iBarShift(gTradeSymbol,TRADE_TF,gRecoveryPauseBarTime,false);
+   if(shift < cooldownBars)
+      return(true);
+
+   gRecoveryPause = false;
+   gRecoveryPauseBarTime = 0;
+   DebugPrint("Recovery cooldown ended: trading resumed");
+   return(false);
+  }
+
+//+------------------------------------------------------------------+
+bool RunRecoveryGuard()
+  {
+   double floatingProfit = 0.0;
+   double latestOpenPrice = 0.0;
+   int basketType = -1;
+   int posCount = CountEaPositions(floatingProfit,latestOpenPrice,basketType);
+   if(posCount<=0)
+      return(false);
+
+   if(IsRecoveryPauseActive())
+      return(true);
+
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance<=0.0 || InpRecoveryLossPercent<=0.0)
+      return(false);
+
+   double lossPercent = (-floatingProfit / balance) * 100.0;
+   if(lossPercent < InpRecoveryLossPercent)
+      return(false);
+
+   DebugPrint("Recovery guard triggered: floating loss="+DoubleToString(lossPercent,2)+"%");
+   if(CloseAllEaPositions())
+     {
+      gRecoveryPause = true;
+      gRecoveryPauseBarTime = iTime(gTradeSymbol,TRADE_TF,0);
+      DebugPrint("All EA positions closed. Recovery cooldown started.");
+     }
+
+   return(true);
+  }
+
+//+------------------------------------------------------------------+
 int OnInit()
   {
    gTradeSymbol = InpSymbol;
@@ -111,6 +239,12 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   if(IsRecoveryPauseActive())
+      return;
+
+   if(RunRecoveryGuard())
+      return;
+
    if(InpUseTrailingStop)
       ManageTrailingStop();
 
@@ -139,48 +273,21 @@ void OnTick()
    if(!buySignal && !sellSignal)
       return;
 
-   int    digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
    if(point<=0.0)
       return;
 
    int maxPositions = MathMax(1,InpMaxPositions);
    int addProfitPoints = MathMax(1,InpAddProfitPoints);
-   int posCount = 0;
-   int basketType = -1;
+   double floatingProfit = 0.0;
    double latestOpenPrice = 0.0;
-   datetime latestOpenTime = 0;
+   int basketType = -1;
+   int posCount = CountEaPositions(floatingProfit,latestOpenPrice,basketType);
 
-   int total = PositionsTotal();
-   for(int i=total-1; i>=0; i--)
+   if(basketType==-2)
      {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket==0)
-         continue;
-      if(!PositionSelectByTicket(ticket))
-         continue;
-
-      string sym = PositionGetString(POSITION_SYMBOL);
-      long mg = PositionGetInteger(POSITION_MAGIC);
-      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
-         continue;
-
-      int pType = (int)PositionGetInteger(POSITION_TYPE);
-      if(basketType==-1)
-         basketType = pType;
-      else if(basketType!=pType)
-        {
-         DebugPrint("Skip: mixed BUY/SELL basket detected");
-         return;
-        }
-
-      posCount++;
-      datetime pTime = (datetime)PositionGetInteger(POSITION_TIME);
-      if(pTime>=latestOpenTime)
-        {
-         latestOpenTime = pTime;
-         latestOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-        }
+      DebugPrint("Skip: mixed BUY/SELL basket detected");
+      return;
      }
 
    if(posCount>=maxPositions)
