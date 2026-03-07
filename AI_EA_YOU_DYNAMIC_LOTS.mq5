@@ -45,6 +45,10 @@ input bool             InpForceMinLot         = true;
 input bool             InpForceMinLotAlways   = true;
 input bool             InpDebug               = true;
 input ulong            InpMagic               = 26030701;
+input bool             InpEnableMilestoneTimer = true;
+input bool             InpMilestoneUseEquity   = false;
+input int              InpMilestoneStep        = 1000;
+input int              InpMilestoneMax         = 1000000;
 
 input int              InpStartHour           = 0;
 input int              InpEndHour             = 0;
@@ -57,6 +61,9 @@ int      gAtrHandle = INVALID_HANDLE;
 int      gWinStreak = 0;
 double   gPeakEquity = 0.0;
 ulong    gLastProcessedDeal = 0;
+datetime gEAStartTime = 0;
+int      gLastMilestoneReported = 0;
+double   gMilestoneStartValue = 0.0;
 
 double GetDynamicSLDistancePrice();
 double GetDynamicTPDistancePrice(const double slDistancePrice);
@@ -68,6 +75,54 @@ void DebugPrint(const string msg)
   {
    if(InpDebug)
       Print(msg);
+  }
+
+//+------------------------------------------------------------------+
+string FormatElapsed(const datetime fromTime,const datetime toTime)
+  {
+   int sec = (int)MathMax(0,toTime-fromTime);
+   int d = sec / 86400;
+   sec %= 86400;
+   int h = sec / 3600;
+   sec %= 3600;
+   int m = sec / 60;
+   int s = sec % 60;
+
+   return(IntegerToString(d)+"d "+
+          IntegerToString(h)+"h "+
+          IntegerToString(m)+"m "+
+          IntegerToString(s)+"s");
+  }
+
+//+------------------------------------------------------------------+
+void TrackMilestoneTimer()
+  {
+   if(!InpEnableMilestoneTimer)
+      return;
+
+   int step = MathMax(1,InpMilestoneStep);
+   int maxTarget = MathMax(step,InpMilestoneMax);
+   double metric = InpMilestoneUseEquity ? AccountInfoDouble(ACCOUNT_EQUITY)
+                                         : AccountInfoDouble(ACCOUNT_BALANCE);
+   double profitUsd = metric - gMilestoneStartValue;
+   int currentProfit = (int)MathFloor(profitUsd);
+
+   int nextTarget = gLastMilestoneReported + step;
+   if(nextTarget<step)
+      nextTarget = step;
+
+   while(nextTarget<=maxTarget && currentProfit>=nextTarget)
+     {
+      string elapsed = FormatElapsed(gEAStartTime,TimeCurrent());
+      string metricName = InpMilestoneUseEquity ? "equity" : "balance";
+      Print("Profit milestone reached +",nextTarget," USD",
+            " | elapsed=",elapsed,
+            " | metric=",metricName,
+            " | currentProfit=",DoubleToString(profitUsd,2),
+            " | started=",TimeToString(gEAStartTime,TIME_DATE|TIME_SECONDS));
+      gLastMilestoneReported = nextTarget;
+      nextTarget += step;
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -261,6 +316,27 @@ int OnInit()
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(20);
+   gEAStartTime = TimeCurrent();
+   gLastMilestoneReported = 0;
+
+   if(InpEnableMilestoneTimer)
+     {
+      int step = MathMax(1,InpMilestoneStep);
+      int maxTarget = MathMax(step,InpMilestoneMax);
+      double metric = InpMilestoneUseEquity ? AccountInfoDouble(ACCOUNT_EQUITY)
+                                            : AccountInfoDouble(ACCOUNT_BALANCE);
+      gMilestoneStartValue = metric;
+      gLastMilestoneReported = 0;
+
+      string metricName = InpMilestoneUseEquity ? "equity" : "balance";
+      Print("Profit milestone timer started. metric=",metricName,
+            " startValue=",DoubleToString(gMilestoneStartValue,2),
+            " targetStepUSD=",IntegerToString(step),
+            " targetMaxUSD=",IntegerToString(maxTarget),
+            " nextTargetProfitUSD=",IntegerToString(step),
+            " startTime=",TimeToString(gEAStartTime,TIME_DATE|TIME_SECONDS));
+     }
+
    gPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    gWinStreak = 0;
    gLastProcessedDeal = 0;
@@ -291,6 +367,8 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   TrackMilestoneTimer();
+
    if(InpUseTrailingStop)
       ManageTrailingStop();
 
