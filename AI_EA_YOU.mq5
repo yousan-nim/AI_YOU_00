@@ -16,6 +16,7 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 200;
 input int              InpTrailingStopPoints  = 10;
+input int              InpCutLossPoints       = 200;
 input double           InpCutLossPercent      = 8.0;
 input int              InpRescueTriggerPoints = 100;
 input double           InpRescueLotMultiplier = 2.0;
@@ -175,6 +176,9 @@ void OnTick()
   {
    if(InpUseTrailingStop)
       ManageTrailingStop();
+
+   if(CutLosingPositionsByPoints())
+      return;
 
    if(!IsTradingHour())
      {
@@ -636,5 +640,64 @@ void ManageTrailingStop()
             trade.PositionModify(gTradeSymbol,newSL,currTP);
         }
      }
+  }
+//+------------------------------------------------------------------+
+bool CutLosingPositionsByPoints()
+  {
+   if(InpCutLossPoints<=0)
+      return(false);
+
+   double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
+   if(point<=0.0)
+      return(false);
+
+   double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
+   double ask = SymbolInfoDouble(gTradeSymbol,SYMBOL_ASK);
+   bool closedAny = false;
+
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long   mg  = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      long posType = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      if(openPrice<=0.0)
+         continue;
+
+      double adversePoints = 0.0;
+      if(posType==POSITION_TYPE_BUY)
+         adversePoints = (openPrice-bid)/point;
+      else if(posType==POSITION_TYPE_SELL)
+         adversePoints = (ask-openPrice)/point;
+      else
+         continue;
+
+      if(adversePoints < (double)InpCutLossPoints)
+         continue;
+
+      if(trade.PositionClose(ticket))
+        {
+         closedAny = true;
+         DebugPrint("Cut by points. Ticket="+(string)ticket+
+                    " adversePoints="+DoubleToString(adversePoints,1));
+        }
+      else
+        {
+         Print("Cut by points failed. Ticket=",ticket,
+               " RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+        }
+     }
+
+   return(closedAny);
   }
 //+------------------------------------------------------------------+
