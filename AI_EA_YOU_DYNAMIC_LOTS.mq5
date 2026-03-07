@@ -16,6 +16,7 @@ input int              InpMaxPositions        = 5;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 300;
 input int              InpTrailingStopPoints  = 80;
+input int              InpMinLockProfitPoints = 50;
 input int              InpCutLossPoints       = 200;
 input double           InpCutLossPercent      = 8.0;
 input int              InpRescueTriggerPoints = 100;
@@ -756,7 +757,7 @@ double CalculateLots(double slDistancePrice,const double riskPercent)
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
   {
-   if(InpTrailingStopPoints<=0)
+   if(InpTrailingStopPoints<=0 && InpMinLockProfitPoints<=0)
       return;
 
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
@@ -764,6 +765,7 @@ void ManageTrailingStop()
       return;
    int minStopPoints = GetMinStopPoints();
    int trailPoints = MathMax(InpTrailingStopPoints,minStopPoints);
+   int lockPoints = MathMax(0,InpMinLockProfitPoints);
    double minDistPrice = (double)minStopPoints * point;
 
    int digits = (int)SymbolInfoInteger(gTradeSymbol,SYMBOL_DIGITS);
@@ -794,9 +796,25 @@ void ManageTrailingStop()
 
       if(posType==POSITION_TYPE_BUY)
         {
-         if((bid-openPrice) <= ((double)trailPoints * point))
+         double moveProfit = (bid-openPrice);
+         double newSL = currSL;
+
+         if(lockPoints>0 && moveProfit >= ((double)lockPoints * point))
+           {
+            double lockSL = NormalizePriceToTick(openPrice + ((double)lockPoints * point));
+            if(newSL==0.0 || lockSL>newSL)
+               newSL = lockSL;
+           }
+
+         if(InpTrailingStopPoints>0 && moveProfit > ((double)trailPoints * point))
+           {
+            double trailSL = NormalizePriceToTick(bid - ((double)trailPoints * point));
+            if(newSL==0.0 || trailSL>newSL)
+               newSL = trailSL;
+           }
+
+         if(newSL<=0.0)
             continue;
-         double newSL = NormalizePriceToTick(bid - ((double)trailPoints * point));
          if((bid-newSL)<=minDistPrice)
             continue;
          if(currSL==0.0 || newSL>currSL)
@@ -804,9 +822,25 @@ void ManageTrailingStop()
         }
       else if(posType==POSITION_TYPE_SELL)
         {
-         if((openPrice-ask) <= ((double)trailPoints * point))
+         double moveProfit = (openPrice-ask);
+         double newSL = currSL;
+
+         if(lockPoints>0 && moveProfit >= ((double)lockPoints * point))
+           {
+            double lockSL = NormalizePriceToTick(openPrice - ((double)lockPoints * point));
+            if(newSL==0.0 || lockSL<newSL)
+               newSL = lockSL;
+           }
+
+         if(InpTrailingStopPoints>0 && moveProfit > ((double)trailPoints * point))
+           {
+            double trailSL = NormalizePriceToTick(ask + ((double)trailPoints * point));
+            if(newSL==0.0 || trailSL<newSL)
+               newSL = trailSL;
+           }
+
+         if(newSL<=0.0)
             continue;
-         double newSL = NormalizePriceToTick(ask + ((double)trailPoints * point));
          if((newSL-ask)<=minDistPrice)
             continue;
          if(currSL==0.0 || newSL<currSL)
