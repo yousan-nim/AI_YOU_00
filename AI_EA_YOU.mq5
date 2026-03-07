@@ -20,6 +20,7 @@ input int              InpCutLossPoints       = 200;
 input double           InpCutLossPercent      = 8.0;
 input int              InpRescueTriggerPoints = 100;
 input double           InpRescueLotMultiplier = 2.0;
+input bool             InpRescueScaleDownWithBalance = true;
 input double           InpRescueCloseNetMoney = 0.0;
 
 input double           InpRiskPercent         = 1.0;
@@ -346,7 +347,15 @@ void OnTick()
 
    if(worstLosingTicket!=0 && worstLosingPoints>=InpRescueTriggerPoints)
      {
-      double rescueLots = NormalizeVolumeToStep(worstLosingLots * MathMax(0.1,InpRescueLotMultiplier));
+      double rescueBaseLots = worstLosingLots;
+      if(InpRescueScaleDownWithBalance)
+        {
+         double dynamicLots = GetDynamicLotsByBalance();
+         if(dynamicLots>0.0)
+            rescueBaseLots = MathMin(rescueBaseLots,dynamicLots);
+        }
+
+      double rescueLots = NormalizeVolumeToStep(rescueBaseLots * MathMax(0.1,InpRescueLotMultiplier));
       if(rescueLots>0.0)
         {
          if(worstLosingType==POSITION_TYPE_BUY)
@@ -354,14 +363,18 @@ void OnTick()
             if(!trade.Sell(rescueLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE"))
                Print("Rescue SELL failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
             else
-               DebugPrint("Rescue SELL opened for losing BUY");
+               DebugPrint("Rescue SELL opened for losing BUY. base="+
+                          DoubleToString(rescueBaseLots,2)+
+                          " lot="+DoubleToString(rescueLots,2));
            }
          else if(worstLosingType==POSITION_TYPE_SELL)
            {
             if(!trade.Buy(rescueLots,gTradeSymbol,0.0,0.0,0.0,"AI_EA_YOU RESCUE"))
                Print("Rescue BUY failed. RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
             else
-               DebugPrint("Rescue BUY opened for losing SELL");
+               DebugPrint("Rescue BUY opened for losing SELL. base="+
+                          DoubleToString(rescueBaseLots,2)+
+                          " lot="+DoubleToString(rescueLots,2));
            }
         }
       else
