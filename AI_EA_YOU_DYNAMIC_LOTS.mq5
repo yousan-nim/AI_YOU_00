@@ -24,29 +24,29 @@ input double           InpRescueLotMultiplier = 2.0;
 input bool             InpRescueScaleDownWithBalance = true;
 input double           InpRescueCloseNetMoney = 0.0;
 
-input double           InpRiskPercent         = 0.35;
+input double           InpRiskPercent         = 0.75;
 input bool             InpUseAtrForSLTP       = true;
 input int              InpAtrPeriod           = 14;
-input double           InpAtrSLMultiplier     = 2.0;
+input double           InpAtrSLMultiplier     = 1.4;
 input double           InpAtrTPMultiplier     = 3.0;
-input int              InpAtrMinPoints        = 120;
+input int              InpAtrMinPoints        = 80;
 input bool             InpUseAntiMartingale   = true;
 input double           InpWinStepMultiplier   = 1.25;
 input int              InpMaxWinStreakSteps   = 3;
 input bool             InpUseDrawdownThrottle = true;
 input double           InpDDLevel1Percent     = 5.0;
-input double           InpDDLevel1RiskFactor  = 0.5;
-input double           InpDDLevel2Percent     = 8.0;
-input double           InpDDLevel2RiskFactor  = 0.0;
-input int              InpMaxSpreadPoints     = 3000;
+input double           InpDDLevel1RiskFactor  = 0.7;
+input double           InpDDLevel2Percent     = 10.0;
+input double           InpDDLevel2RiskFactor  = 0.25;
+input int              InpMaxSpreadPoints     = 5000;
 input bool             InpOnePositionOnly     = true;
 input bool             InpCloseOnReverse      = true;
 input bool             InpForceMinLot         = true;
 input bool             InpDebug               = true;
 input ulong            InpMagic               = 26030701;
 
-input int              InpStartHour           = 1;
-input int              InpEndHour             = 23;
+input int              InpStartHour           = 0;
+input int              InpEndHour             = 0;
 
 CTrade trade;
 
