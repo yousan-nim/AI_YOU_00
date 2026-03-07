@@ -3,7 +3,7 @@
 //|     BTCUSD M1 Dynamic Lots + Spread/Commission Cost-Aware EA      |
 //+------------------------------------------------------------------+
 #property copyright "2026"
-#property version   "1.22"
+#property version   "1.23"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -12,46 +12,46 @@ input string           InpSymbol              = "BTCUSD";
 input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
 input bool             InpUseTrailingStop     = true;
-input int              InpMaxPositions        = 4;
-input int              InpAddProfitPoints     = 3000;
-input int              InpTakeProfitPoints    = 8000;
-input int              InpTrailingStopPoints  = 5000;
+input int              InpMaxPositions        = 2;
+input int              InpAddProfitPoints     = 5000;
+input int              InpTakeProfitPoints    = 10000;
+input int              InpTrailingStopPoints  = 6000;
 input int              InpMinLockProfitPoints = 1000;
 input bool             InpUseProfitRetraceExit = true;
-input int              InpProfitRetraceStartPoints = 4000;
-input int              InpProfitRetraceGivebackPoints = 1500;
-input int              InpCutLossPoints       = 7000;
-input double           InpCutLossPercent      = 6.0;
-input int              InpRescueTriggerPoints = 5000;
-input double           InpRescueLotMultiplier = 1.5;
+input int              InpProfitRetraceStartPoints = 3000;
+input int              InpProfitRetraceGivebackPoints = 1000;
+input int              InpCutLossPoints       = 5000;
+input double           InpCutLossPercent      = 3.0;
+input int              InpRescueTriggerPoints = 100000000;
+input double           InpRescueLotMultiplier = 1.0;
 input bool             InpRescueScaleDownWithBalance = true;
 input double           InpRescueCloseNetMoney = 0.0;
 
-input double           InpRiskPercent         = 0.50;
+input double           InpRiskPercent         = 0.25;
 input bool             InpUseAtrForSLTP       = true;
 input int              InpAtrPeriod           = 14;
 input double           InpAtrSLMultiplier     = 1.8;
 input double           InpAtrTPMultiplier     = 3.5;
 input int              InpAtrMinPoints        = 2500;
-input bool             InpUseAntiMartingale   = true;
+input bool             InpUseAntiMartingale   = false;
 input double           InpWinStepMultiplier   = 1.25;
 input int              InpMaxWinStreakSteps   = 3;
 input bool             InpUseDrawdownThrottle = true;
 input double           InpDDLevel1Percent     = 6.0;
-input double           InpDDLevel1RiskFactor  = 0.6;
+input double           InpDDLevel1RiskFactor  = 0.4;
 input double           InpDDLevel2Percent     = 12.0;
-input double           InpDDLevel2RiskFactor  = 0.2;
-input double           InpMinEffectiveRiskPercent = 0.08;
-input int              InpMaxSpreadPoints     = 60000;
+input double           InpDDLevel2RiskFactor  = 0.1;
+input double           InpMinEffectiveRiskPercent = 0.02;
+input int              InpMaxSpreadPoints     = 45000;
 input bool             InpUseSpreadEdgeFilter = true;
 input double           InpCommissionPerLotPerSideUSD = 3.5;
 input int              InpEstimatedSlippagePointsRoundTrip = 60;
-input int              InpMinNetTPAfterCostPoints = 2000;
-input double           InpMinTPtoCostRatio    = 1.6;
+input int              InpMinNetTPAfterCostPoints = 3000;
+input double           InpMinTPtoCostRatio    = 2.2;
 input bool             InpOnePositionOnly     = true;
 input bool             InpCloseOnReverse      = true;
 input bool             InpForceMinLot         = true;
-input bool             InpForceMinLotAlways   = true;
+input bool             InpForceMinLotAlways   = false;
 input bool             InpDebug               = true;
 input ulong            InpMagic               = 26030721;
 input bool             InpEnableMilestoneTimer = true;
