@@ -42,6 +42,7 @@ input int              InpMaxSpreadPoints     = 5000;
 input bool             InpOnePositionOnly     = true;
 input bool             InpCloseOnReverse      = true;
 input bool             InpForceMinLot         = true;
+input bool             InpForceMinLotAlways   = true;
 input bool             InpDebug               = true;
 input ulong            InpMagic               = 26030701;
 
@@ -735,8 +736,13 @@ double CalculateLots(double slDistancePrice,const double riskPercent)
    lots = MathFloor(lots/lotStep)*lotStep;
    if(lots<minLot)
      {
-      // Force min lot only when risk budget can actually cover min-lot stop loss.
-      if(InpForceMinLot && riskMoney >= (moneyPerLot * minLot))
+      // Optional hard fallback so EA can continue trading even when risk model returns too small lot.
+      if(InpForceMinLotAlways && InpForceMinLot)
+        {
+         DebugPrint("Lot fallback: using min lot (risk model too small)");
+         lots = minLot;
+        }
+      else if(InpForceMinLot && riskMoney >= (moneyPerLot * minLot))
          lots = minLot;
       else
          return(0.0);
