@@ -17,6 +17,9 @@ input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 300;
 input int              InpTrailingStopPoints  = 200;
 input int              InpMinLockProfitPoints = 200;
+input bool             InpUseProfitRetraceExit = true;
+input int              InpProfitRetraceStartPoints = 150;
+input int              InpProfitRetraceGivebackPoints = 80;
 input int              InpCutLossPoints       = 200;
 input double           InpCutLossPercent      = 8.0;
 input int              InpRescueTriggerPoints = 100;
@@ -65,12 +68,18 @@ ulong    gLastProcessedDeal = 0;
 datetime gEAStartTime = 0;
 int      gLastMilestoneReported = 0;
 double   gMilestoneStartValue = 0.0;
+ulong    gTrackTickets[];
+double   gTrackBestPoints[];
 
 double GetDynamicSLDistancePrice();
 double GetDynamicTPDistancePrice(const double slDistancePrice);
 double GetEffectiveRiskPercent();
 double CalculateLots(double slDistancePrice,const double riskPercent);
 void UpdateMilestoneComment();
+bool ManageProfitRetraceExit();
+void CleanupTrackedTickets();
+int FindTrackedTicketIndex(const ulong ticket);
+void UpsertTrackedBestPoints(const ulong ticket,const double currentPoints);
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -369,6 +378,8 @@ int OnInit()
    gPeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    gWinStreak = 0;
    gLastProcessedDeal = 0;
+   ArrayResize(gTrackTickets,0);
+   ArrayResize(gTrackBestPoints,0);
 
    gAtrHandle = iATR(gTradeSymbol,TRADE_TF,MathMax(2,InpAtrPeriod));
    if(gAtrHandle==INVALID_HANDLE)
@@ -391,6 +402,8 @@ void OnDeinit(const int reason)
   {
    if(gAtrHandle!=INVALID_HANDLE)
       IndicatorRelease(gAtrHandle);
+   ArrayResize(gTrackTickets,0);
+   ArrayResize(gTrackBestPoints,0);
    Comment("");
   }
 
@@ -402,6 +415,9 @@ void OnTick()
 
    if(InpUseTrailingStop)
       ManageTrailingStop();
+
+   if(ManageProfitRetraceExit())
+      return;
 
    if(CutLosingPositionsByPoints())
       return;
@@ -724,6 +740,130 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    gLastProcessedDeal = trans.deal;
    DebugPrint("Closed deal profit="+DoubleToString(profit,2)+
               " winStreak="+IntegerToString(gWinStreak));
+  }
+
+//+------------------------------------------------------------------+
+bool ManageProfitRetraceExit()
+  {
+   if(!InpUseProfitRetraceExit)
+      return(false);
+
+   double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
+   if(point<=0.0)
+      return(false);
+
+   double bid = SymbolInfoDouble(gTradeSymbol,SYMBOL_BID);
+   double ask = SymbolInfoDouble(gTradeSymbol,SYMBOL_ASK);
+   double startPoints = (double)MathMax(1,InpProfitRetraceStartPoints);
+   double givebackPoints = (double)MathMax(1,InpProfitRetraceGivebackPoints);
+   bool closedAny = false;
+
+   int total = PositionsTotal();
+   for(int i=total-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket==0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      string sym = PositionGetString(POSITION_SYMBOL);
+      long   mg  = PositionGetInteger(POSITION_MAGIC);
+      if(sym!=gTradeSymbol || (ulong)mg!=InpMagic)
+         continue;
+
+      long posType = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      if(openPrice<=0.0)
+         continue;
+
+      double currentPoints = 0.0;
+      if(posType==POSITION_TYPE_BUY)
+         currentPoints = (bid-openPrice)/point;
+      else if(posType==POSITION_TYPE_SELL)
+         currentPoints = (openPrice-ask)/point;
+      else
+         continue;
+
+      UpsertTrackedBestPoints(ticket,currentPoints);
+      int idx = FindTrackedTicketIndex(ticket);
+      if(idx<0)
+         continue;
+
+      double bestPoints = gTrackBestPoints[idx];
+      if(bestPoints < startPoints)
+         continue;
+      if(currentPoints <= 0.0)
+         continue;
+
+      if(currentPoints <= (bestPoints - givebackPoints))
+        {
+         if(trade.PositionClose(ticket))
+           {
+            DebugPrint("Profit retrace exit. Ticket="+(string)ticket+
+                       " best="+DoubleToString(bestPoints,1)+
+                       " current="+DoubleToString(currentPoints,1));
+            closedAny = true;
+           }
+         else
+           {
+            Print("Profit retrace close failed. Ticket=",ticket,
+                  " RetCode=",trade.ResultRetcode()," ",trade.ResultRetcodeDescription());
+           }
+        }
+     }
+
+   CleanupTrackedTickets();
+   return(closedAny);
+  }
+
+//+------------------------------------------------------------------+
+int FindTrackedTicketIndex(const ulong ticket)
+  {
+   int n = ArraySize(gTrackTickets);
+   for(int i=0; i<n; i++)
+      if(gTrackTickets[i]==ticket)
+         return(i);
+   return(-1);
+  }
+
+//+------------------------------------------------------------------+
+void UpsertTrackedBestPoints(const ulong ticket,const double currentPoints)
+  {
+   int idx = FindTrackedTicketIndex(ticket);
+   if(idx<0)
+     {
+      int n = ArraySize(gTrackTickets);
+      ArrayResize(gTrackTickets,n+1);
+      ArrayResize(gTrackBestPoints,n+1);
+      gTrackTickets[n] = ticket;
+      gTrackBestPoints[n] = currentPoints;
+      return;
+     }
+
+   if(currentPoints > gTrackBestPoints[idx])
+      gTrackBestPoints[idx] = currentPoints;
+  }
+
+//+------------------------------------------------------------------+
+void CleanupTrackedTickets()
+  {
+   int n = ArraySize(gTrackTickets);
+   for(int i=n-1; i>=0; i--)
+     {
+      ulong ticket = gTrackTickets[i];
+      if(ticket==0 || !PositionSelectByTicket(ticket))
+        {
+         int last = ArraySize(gTrackTickets)-1;
+         if(i!=last)
+           {
+            gTrackTickets[i] = gTrackTickets[last];
+            gTrackBestPoints[i] = gTrackBestPoints[last];
+           }
+         ArrayResize(gTrackTickets,last);
+         ArrayResize(gTrackBestPoints,last);
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
