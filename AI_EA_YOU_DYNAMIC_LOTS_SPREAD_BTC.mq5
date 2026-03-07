@@ -16,7 +16,9 @@ input int              InpMaxPositions        = 4;
 input int              InpAddProfitPoints     = 3000;
 input int              InpTakeProfitPoints    = 8000;
 input int              InpTrailingStopPoints  = 3500;
-input int              InpMinLockProfitPoints = 2500;
+input int              InpMinLockProfitPoints = 2000;
+input bool             InpUseBreakEvenOnProfit = true;
+input int              InpBreakEvenOffsetPoints = 0;
 input bool             InpUseProfitRetraceExit = true;
 input int              InpProfitRetraceStartPoints = 4000;
 input int              InpProfitRetraceGivebackPoints = 1500;
@@ -1074,7 +1076,7 @@ double CalculateLots(double slDistancePrice,const double riskPercent)
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
   {
-   if(InpTrailingStopPoints<=0 && InpMinLockProfitPoints<=0)
+   if(InpTrailingStopPoints<=0 && InpMinLockProfitPoints<=0 && !InpUseBreakEvenOnProfit)
       return;
 
    double point = SymbolInfoDouble(gTradeSymbol,SYMBOL_POINT);
@@ -1116,6 +1118,13 @@ void ManageTrailingStop()
          double moveProfit = (bid-openPrice);
          double newSL = currSL;
 
+         if(InpUseBreakEvenOnProfit && moveProfit > 0.0)
+           {
+            double beSL = NormalizePriceToTick(openPrice + ((double)MathMax(0,InpBreakEvenOffsetPoints) * point));
+            if(newSL==0.0 || beSL>newSL)
+               newSL = beSL;
+           }
+
          if(lockPoints>0 && moveProfit >= ((double)lockPoints * point))
            {
             double lockSL = NormalizePriceToTick(openPrice + ((double)lockPoints * point));
@@ -1141,6 +1150,13 @@ void ManageTrailingStop()
         {
          double moveProfit = (openPrice-ask);
          double newSL = currSL;
+
+         if(InpUseBreakEvenOnProfit && moveProfit > 0.0)
+           {
+            double beSL = NormalizePriceToTick(openPrice - ((double)MathMax(0,InpBreakEvenOffsetPoints) * point));
+            if(newSL==0.0 || beSL<newSL)
+               newSL = beSL;
+           }
 
          if(lockPoints>0 && moveProfit >= ((double)lockPoints * point))
            {
