@@ -12,11 +12,11 @@ input string           InpSymbol              = "XAUUSD";
 input ENUM_TIMEFRAMES  InpTimeframe           = PERIOD_M1;
 
 input bool             InpUseTrailingStop     = true;
-input int              InpMaxPositions        = 5;
+input int              InpMaxPositions        = 8;
 input int              InpAddProfitPoints     = 100;
 input int              InpTakeProfitPoints    = 300;
-input int              InpTrailingStopPoints  = 80;
-input int              InpMinLockProfitPoints = 50;
+input int              InpTrailingStopPoints  = 200;
+input int              InpMinLockProfitPoints = 200;
 input int              InpCutLossPoints       = 200;
 input double           InpCutLossPercent      = 8.0;
 input int              InpRescueTriggerPoints = 100;
@@ -770,7 +770,7 @@ void ManageTrailingStop()
    if(point<=0.0)
       return;
    int minStopPoints = GetMinStopPoints();
-   int trailPoints = MathMax(InpTrailingStopPoints,minStopPoints);
+   int trailPoints = MathMax(MathMax(InpTrailingStopPoints,minStopPoints),200);
    int lockPoints = MathMax(0,InpMinLockProfitPoints);
    double minDistPrice = (double)minStopPoints * point;
 
