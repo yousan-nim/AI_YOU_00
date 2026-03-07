@@ -38,6 +38,7 @@ input double           InpDDLevel1Percent     = 5.0;
 input double           InpDDLevel1RiskFactor  = 0.7;
 input double           InpDDLevel2Percent     = 10.0;
 input double           InpDDLevel2RiskFactor  = 0.25;
+input double           InpMinEffectiveRiskPercent = 0.10;
 input int              InpMaxSpreadPoints     = 5000;
 input bool             InpOnePositionOnly     = true;
 input bool             InpCloseOnReverse      = true;
@@ -69,6 +70,7 @@ double GetDynamicSLDistancePrice();
 double GetDynamicTPDistancePrice(const double slDistancePrice);
 double GetEffectiveRiskPercent();
 double CalculateLots(double slDistancePrice,const double riskPercent);
+void UpdateMilestoneComment();
 
 //+------------------------------------------------------------------+
 void DebugPrint(const string msg)
@@ -120,9 +122,35 @@ void TrackMilestoneTimer()
             " | metric=",metricName,
             " | currentProfit=",DoubleToString(profitUsd,2),
             " | started=",TimeToString(gEAStartTime,TIME_DATE|TIME_SECONDS));
-      gLastMilestoneReported = nextTarget;
+     gLastMilestoneReported = nextTarget;
       nextTarget += step;
      }
+  }
+
+//+------------------------------------------------------------------+
+void UpdateMilestoneComment()
+  {
+   if(!InpEnableMilestoneTimer)
+     {
+      Comment("");
+      return;
+     }
+
+   int step = MathMax(1,InpMilestoneStep);
+   int maxTarget = MathMax(step,InpMilestoneMax);
+   double metric = InpMilestoneUseEquity ? AccountInfoDouble(ACCOUNT_EQUITY)
+                                         : AccountInfoDouble(ACCOUNT_BALANCE);
+   double profitUsd = metric - gMilestoneStartValue;
+   int nextTarget = gLastMilestoneReported + step;
+   if(nextTarget<step)
+      nextTarget = step;
+   if(nextTarget>maxTarget)
+      nextTarget = maxTarget;
+
+   Comment("AI_EA_YOU_DYNAMIC_LOTS\n",
+           "Profit from start: ",DoubleToString(profitUsd,2)," USD\n",
+           "Next milestone: +",IntegerToString(nextTarget)," USD\n",
+           "Elapsed: ",FormatElapsed(gEAStartTime,TimeCurrent()));
   }
 
 //+------------------------------------------------------------------+
@@ -282,6 +310,7 @@ double GetEffectiveRiskPercent()
          risk *= MathMax(0.0,InpDDLevel1RiskFactor);
      }
 
+   risk = MathMax(risk,MathMax(0.01,InpMinEffectiveRiskPercent));
    return(risk);
   }
 
@@ -362,12 +391,14 @@ void OnDeinit(const int reason)
   {
    if(gAtrHandle!=INVALID_HANDLE)
       IndicatorRelease(gAtrHandle);
+   Comment("");
   }
 
 //+------------------------------------------------------------------+
 void OnTick()
   {
    TrackMilestoneTimer();
+   UpdateMilestoneComment();
 
    if(InpUseTrailingStop)
       ManageTrailingStop();
